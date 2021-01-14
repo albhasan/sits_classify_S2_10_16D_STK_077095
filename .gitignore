@@ -37,3 +37,9 @@ vignettes/*.pdf
 
 # R Environment Variables
 .Renviron
+
+#
+/results/
+**/data/prodes
+**/data/prodes/
+**/data/cube/
