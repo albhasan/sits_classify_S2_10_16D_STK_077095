@@ -1,25 +1,37 @@
 # Duration of the classification
+library(dplyr)
+library(ggplot2)
+library(magrittr)
 
-time_vec <- readRDS("./data/cube/077095_split_results/processing_time.rds")
-time_df <- as.data.frame(t(as.data.frame(time_vec)))
-rownames(time_df) <- NULL
-colnames(time_df) <- c("end_time", "start_time")
-time_df["class_time"] <- difftime(time_df$end_time, time_df$start_time,
-                                  units = "min")
-head(time_df)
+time_file <- "./results/paper_defor/077095_split/processing_time.rds"
+stopifnot(file.exists(time_file))
+
+time_df <- time_file %>%
+    readRDS() %>%
+    as.data.frame() %>%
+    ensurer::ensure_that(nrow(.) > 0, ncol(.) > 0,
+                         err_desc = "No data found!") %>%
+    t() %>%
+    as.data.frame() %>%
+    magrittr::set_rownames(value = NULL) %>%
+    magrittr::set_colnames(value = c("end_time", "start_time")) %>%
+    dplyr::mutate(class_time = difftime(end_time, start_time, units = "min"))
+time_df
 
 # Total classification time
-(total_time <- difftime(max(time_df$end_time), min(time_df$start_time),
+(total_time <- difftime(max(time_df$end_time),
+                        min(time_df$start_time),
                         units = "hours"))
 
 # Mean classification time of a subtile
 (mean_time <- mean(as.vector(time_df$class_time)))
+
+# Standard deviation
 sd_time <- sd(as.vector(time_df$class_time))
 
-
-#hist(as.vector(time_df$class_time), breaks = 19)
-ggplot2::ggplot() +
-    ggplot2::geom_histogram(ggplot2::aes(time_comp)) +
-    ggplot2::stat_function(fun = dnorm,
-                           args = list(mean = mean_time,
-                                       sd = sd_time))
+time_df %>%
+    ggplot() +
+    geom_histogram(aes(class_time)) +
+    stat_function(fun = dnorm,
+                  args = list(mean = mean_time,
+                              sd = sd_time))
