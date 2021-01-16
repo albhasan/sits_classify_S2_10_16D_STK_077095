@@ -13,6 +13,70 @@ add_coords <- function(point_sf){
 }
 
 
+#' Build a list of start and end pixels
+#'
+#' @param r_obj    A raster object.
+#' @param n_row    An integer. The number of rows in the grid.
+#' @param n_col    An integer. The number of columns in the grid.
+#' @param v_size   An integer. The vertical size of a cell in the grid.
+#' @param h_size   An integer. The horizontal size of a cell in the grid.
+#' @return         A dataframe of 2 column-lists.
+build_grid <- function(n_row, n_col, v_size, h_size) {
+
+    breaks_v <- unique(c(seq(1, n_row, by = v_size), n_row + 1))
+    v_start <- breaks_v[seq_len(length(breaks_v) - 1)]
+    v_end <- breaks_v[-1] - 1
+
+    breaks_h <- unique(c(seq(1, n_col, by = h_size), n_col + 1))
+    h_start <- breaks_h[seq_len(length(breaks_h) - 1)]
+    h_end <- breaks_h[-1] - 1
+
+    v_interval <- mapply(list, r1 = v_start, r2 = v_end, SIMPLIFY = FALSE)
+    h_interval <- mapply(list, c1 = h_start, c2 = h_end, SIMPLIFY = FALSE)
+
+    return(expand.grid(v = v_interval, h = h_interval))
+}
+
+
+#' Build a tesselation of subtiles of a raster using the given grid.
+#'
+#' @param grid       A grid created using the function build_grid.
+#' @param image_path Path to a raster.
+#' @param out_dir    A path.
+#' @param out_file   A path.
+#' @return           Paths to VRT files.
+build_vrt <- function(grid, image_path, out_dir, out_file){
+    r_obj <- raster::raster(image_path)
+    stopifnot(dir.exists(out_dir))
+    res <- lapply(seq_len(nrow(grid)), function(i){
+        my_extent <- raster::extent(r_obj,
+                                    c1 = grid$h[[i]]$c1,
+                                    c2 = grid$h[[i]]$c2,
+                                    r1 = grid$v[[i]]$r1,
+                                    r2 = grid$v[[i]]$r2)
+        out_dir <- paste0(out_dir, "/",
+                          paste(grid$h[[i]]$c1,
+                                grid$v[[i]]$r1,
+                                sep = "_"))
+        if (!dir.exists(out_dir))
+            dir.create(out_dir)
+        stopifnot(dir.exists(out_dir))
+
+        file_name <- paste0(out_dir, "/", out_file)
+
+        gdalUtils::gdalbuildvrt(
+            gdalfile = raster::filename(r_obj),
+            output.vrt = file_name,
+            te = c(attr(my_extent, "xmin"),
+                   attr(my_extent, "ymin"),
+                   attr(my_extent, "xmax"),
+                   attr(my_extent, "ymax")),
+            tr = c(raster::xres(r_obj), raster::xres(r_obj)))
+        return(file_name)
+    })
+    return(unlist(res))
+}
+
 #' Remove invalid samples of time series.
 #'
 #' @param  sits_tb A sits_tibble.
@@ -68,7 +132,6 @@ clean_ts <- function(sits_tb, report = FALSE){
 }
 
 
-
 #' Compute the information entropy in nats.
 #'
 #' @param img_path A length-one character. Path to a sits probability file.
@@ -102,7 +165,6 @@ compute_entropy <- function(img_path, out_file){
     res <- system(cmd)
     invisible(out_file)
 }
-
 
 
 # Return a cube
@@ -170,66 +232,4 @@ is_sits_valid <- function(x){
         ensurer::ensure_that("sits" %in% class(.),
                              err_desc = "The tibble is not a sits tibble")
     invisible(x)
-}
-
-
-#' Build a list of start and end pixels
-#'
-#' @param r_obj    A raster object.
-#' @param h_tiles  Number of horizontal tiles.
-#' @param v_tiles  Number of vertical tiles.
-#' @return         A dataframe of 2 column-lists.
-build_grid <- function(r_obj, h_tiles, v_tiles) {
-    n_col <- raster::ncol(r_obj)
-    n_row <- raster::nrow(r_obj)
-
-    breaks_h <- ceiling(seq(1, n_col + 1, length.out = h_tiles + 1))
-    h_start <- breaks_h[seq_len(length(breaks_h) - 1)]
-    h_end <- breaks_h[-1] - 1
-
-    breaks_v <- ceiling(seq(1, n_row + 1, length.out = v_tiles + 1))
-    v_start <- breaks_v[seq_len(length(breaks_v) - 1)]
-    v_end <- breaks_v[-1] - 1
-
-    h_interval <- mapply(list, c1 = h_start, c2 = h_end, SIMPLIFY = FALSE)
-    v_interval <- mapply(list, r1 = v_start, r2 = v_end, SIMPLIFY = FALSE)
-
-    return(expand.grid(h = h_interval, v = v_interval))
-}
-
-#' Build a tesselation of subtiles of a raster using the given grid.
-#'
-#' @param grid   A grid created using build_grid.
-#' @param r_obj  A raster object.
-#' @param out_dir  A path.
-#' @param out_file A file name.
-build_vrt <- function(grid, r_obj, out_dir, out_file){
-    stopifnot(dir.exists(out_dir))
-    res <- lapply(seq_len(nrow(grid)), function(i){
-        my_extent <- raster::extent(r_obj,
-                                    c1 = grid$h[[i]]$c1,
-                                    c2 = grid$h[[i]]$c2,
-                                    r1 = grid$v[[i]]$r1,
-                                    r2 = grid$v[[i]]$r2)
-        out_dir <- paste0(out_dir, "/",
-                          paste(grid$h[[i]]$c1,
-                                grid$v[[i]]$r1,
-                                sep = "_"))
-        if (!dir.exists(out_dir))
-            dir.create(out_dir)
-        stopifnot(dir.exists(out_dir))
-
-        file_name <- paste0(out_dir, "/", out_file)
-
-        gdalUtils::gdalbuildvrt(
-            gdalfile = raster::filename(r_obj),
-            output.vrt = file_name,
-            te = c(attr(my_extent, "xmin"),
-                   attr(my_extent, "ymin"),
-                   attr(my_extent, "xmax"),
-                   attr(my_extent, "ymax")),
-            tr = c(raster::xres(r_obj), raster::xres(r_obj)))
-        return(file_name)
-    })
-    return(unlist(res))
 }
