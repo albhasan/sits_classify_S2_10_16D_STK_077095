@@ -2,6 +2,7 @@
 
 library(magrittr)
 library(dplyr)
+library(raster)
 library(snow)
 
 source("./scripts/00_util.R")
@@ -14,29 +15,29 @@ source("./scripts/00_util.R")
 #'
 #'@param cl          An snow cluster object.
 #'@param input_files A character of path to image files.
-#'@param h_tiles     The number of horizontal tiles.
-#'@param v_tiles     The number of vertical tiles.
 #'@out_dir           A path to a directory.
 #'@return            NULL
-construct_vrt <- function(cl, input_files, h_tiles, v_tiles, out_dir){
+construct_vrt <- function(cl, input_files, v_size, h_size, out_dir){
     if (any(grepl("/vsicurl", input_files))) {
         BDC_ACCESS_KEY <- Sys.getenv("BDC_ACCESS_KEY")
         stopifnot(BDC_ACCESS_KEY != "")
         input_files <- paste0(input_files, "?access_token=", BDC_ACCESS_KEY)
     }
-    grid <- build_grid(r_obj = raster::raster(input_files[1]),
-                       v_tiles = v_tiles,
-                       h_tiles = h_tiles)
+    lin_col <- dim(raster::raster(input_files[1]))
+
+    grid <- build_grid(n_row = lin_col[[1]],
+                       n_col = lin_col[[2]],
+                       v_size = v_size,
+                       h_size = h_size)
 
     snow::clusterExport(cl, list("build_vrt", "grid"))
-
 
     stopifnot(length(dir(out_dir)) == 0)
 
     vrt_files <- snow::clusterApplyLB(cl, x = input_files, fun = function(file_path,
                                                                           out_dir){
         vrt_files <- build_vrt(grid = grid,
-                               r_obj = raster::raster(file_path),
+                               image_path = file_path,
                                out_dir = out_dir,
                                out_file = paste0(tools::file_path_sans_ext(basename(file_path)),
                                                  ".vrt"))
@@ -46,6 +47,7 @@ construct_vrt <- function(cl, input_files, h_tiles, v_tiles, out_dir){
 
     stopifnot(length(input_files) == length(vrt_files))
     stopifnot(all(vapply(vrt_files, length, integer(1)) == nrow(grid)))
+    saveRDS(grid, paste0(out_dir, "/grid.rds"))
 }
 
 #---- Query RSTAC ----
@@ -88,10 +90,10 @@ file_vec <- "/home/alber.ipia/Documents/sits_classify_S2_10_16D_STK_077095/data/
 
 out_dir <- "/home/alber.ipia/Documents/sits_classify_S2_10_16D_STK_077095/data/cube/077095_split"
 
-my_cluster <- snow::makeSOCKcluster(16)
+my_cluster <- snow::makeSOCKcluster(24)
 construct_vrt(cl = my_cluster,
               input_files = file_vec,
-              h_tiles = 8,
-              v_tiles = 8,
+              h_size = 512,
+              v_size = 10986,
               out_dir = out_dir)
 snow::stopCluster(my_cluster)
