@@ -4,13 +4,14 @@ Classification of deforestation using sits and Brazil Data Cubes.
 
 * Cube Sentinel2 077095 STACK.
 * Resolution of 10 meters and 16 days.
-* Classifier in the R package SITS.
+* Classifier in the R package SITS (commit cfe76341c858b5c37d45d44513aefb64b6826e84). 
 
-## TODO:
+### TODO:
 
-* Apply PRODES mask and compute accuracy
+* Apply PRODES mask and compute accuracy.
+* Ask Rolf for script and replace 08_post_processing.R.
 
-## DONE:
+### DONE:
 * Get time series of the samples (use file in ./data/samples/alber3_bdc077095.csv
 * Download the images of the BDC (use file in ./scripts/S2_10_16D_STK-1.txt)
 * Analize sample time series looking for outliers. SOM?
