@@ -40,6 +40,9 @@ vignettes/*.pdf
 
 #
 /results/
+**/data/cube/
 **/data/prodes
 **/data/prodes/
-**/data/cube/
+**/data/global_forest_watch
+**/data/global_forest_watch/
+
