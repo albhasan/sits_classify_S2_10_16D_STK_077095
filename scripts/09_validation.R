@@ -23,6 +23,12 @@ gdalUtils::gdalbuildvrt(gdalfile = class_file,
 #---- Compare classification to PRODES -----
 
 # Pre-process PRODES.
+
+
+TODO: do it again in 10 meters!!!!!!
+
+
+
 prodes_trans <- tempfile(pattern = "prodes_wgs84_",
                          fileext = ".tif")
 gdalUtils::gdalwarp(srcfile = prodes_file,
