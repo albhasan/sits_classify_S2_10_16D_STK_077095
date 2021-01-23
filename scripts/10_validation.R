@@ -25,7 +25,7 @@ gdalUtils::gdalbuildvrt(gdalfile = class_file,
 # Pre-process PRODES.
 
 
-TODO: do it again in 10 meters!!!!!!
+# TODO: do it again in 10 meters!!!!!!
 
 
 
@@ -41,6 +41,8 @@ gdalUtils::gdalwarp(srcfile = prodes_file,
                     r = "near",
                     ot = "Int16")
 
+# NOTE: Reasampling the finer to the coarser resolution requires using the
+#       resampling mode.
 class_trans <- tempfile(pattern = "class_wgs84_",
                         fileext = ".tif")
 gdalUtils::gdalwarp(srcfile = class_vrt,
@@ -50,7 +52,7 @@ gdalUtils::gdalwarp(srcfile = class_vrt,
                     tr = c(0.000268987056828,-0.000269018801881),
                     te = c(-65.23432383171814308, -10.92505295837335844,
                            -63.71562290886634372, -10.00312552432653312),
-                    r = "near",
+                    r = "mode",
                     ot = "Int16")
 
 class_prodes_overlay <- "/home/alber.ipia/Documents/sits_classify_S2_10_16D_STK_077095/results/paper_defor/overlay_class_prodes.tif"
@@ -58,18 +60,7 @@ class_prodes_overlay <- "/home/alber.ipia/Documents/sits_classify_S2_10_16D_STK_
 cmd <- sprintf("gdal_calc.py -A %s -B %s --outfile=%s --calc='(A.astype(numpy.int16) * 100) + B.astype(numpy.int16)' --type=Int16 --NoDataValue=-9999 --quiet --co COMPRESS=LZW --co BIGTIFF=YES",
                class_trans, prodes_trans, class_prodes_overlay)
 
-# NOTE: This throws an error. I ran it localy!
 system(cmd)
-# ERROR 1: TIFFScanlineSize64:Computed scanline size is zero
-# ERROR 1: TIFFReadDirectory:Cannot handle zero scanline size
-# Traceback (most recent call last):
-#     File "/usr/bin/gdal_calc.py", line 483, in <module>
-#     main()
-# File "/usr/bin/gdal_calc.py", line 476, in main
-# doit(opts, args)
-# File "/usr/bin/gdal_calc.py", line 201, in doit
-# if [myOut.RasterXSize, myOut.RasterYSize] != DimensionsCheck:
-#     AttributeError: 'NoneType' object has no attribute 'RasterXSize'
 
 stopifnot(file.exists(class_prodes_overlay))
 
@@ -128,17 +119,17 @@ count_tb <- overlay_table %>%
 
 cont_table <- xtabs(frequency ~ predicted + reference , data = data.frame(count_tb))
 cont_table
-#                  reference
-# predicted       deforestation_p forest_p
-# deforestation          162725   311269
-# forest                  15564  8576621
+#                              reference
+# predicted       deforestation_2019  forest
+# deforestation               163492  313346
+# forest                       15561 8597166
 
 print("Producer's accuracy")
 diag(cont_table) / colSums(cont_table)
-# deforestation_p        forest_p
-# 0.9127035       0.9649783
+# deforestation_2019             forest
+#          0.9130928          0.9648341
 
 print("User's accuracy")
 diag(cont_table) / rowSums(cont_table)
 # deforestation        forest
-# 0.3433060     0.9981886
+#     0.3428670     0.9981933
