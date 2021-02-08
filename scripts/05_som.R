@@ -6,6 +6,7 @@ library(sits)
 
 
 #---- Util ----
+
 run_som <- function(my_samples){
     return(
         sits::sits_som_map(my_samples,
@@ -22,7 +23,11 @@ run_som <- function(my_samples){
 
 #---- Script -----
 
-samples_tb <- "./data/samples/samples.rds" %>%
+samples_file <- "./data/samples/samples.rds"
+stopifnot(file.exists(samples_file))
+
+
+samples_tb <- samples_file %>%
     readRDS() %>%
     tidyr::unnest(time_series) %>%
     dplyr::mutate(EVI  = 2.5 * (B08 - B04)/(B08 + 6 * B04 - 7.5 * B02 + 1),
@@ -60,15 +65,12 @@ som_samples_tb <- som_cluster %>%
         invisible(x)
     }) %>%
     dplyr::filter(eval == "clean")
-# # A tibble: 3 x 2
 # eval        n
-# <chr>   <int>
-# 1 analyze    86
-# 2 clean     937
-# 3 remove    179
+# 1 analyze   204
+# 2 clean     818
+# 3 remove    388
 
-
-time_series_tb <- "./data/samples/samples.rds" %>%
+time_series_tb <- samples_file %>%
     readRDS() %>%
     dplyr::mutate(id_coords = stringr::str_c(
         round(longitude, digits = 6),

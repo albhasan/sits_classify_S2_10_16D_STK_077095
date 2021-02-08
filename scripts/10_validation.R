@@ -24,10 +24,7 @@ gdalUtils::gdalbuildvrt(gdalfile = class_file,
 
 # Pre-process PRODES.
 
-
 # TODO: do it again in 10 meters!!!!!!
-
-
 
 prodes_trans <- tempfile(pattern = "prodes_wgs84_",
                          fileext = ".tif")
@@ -133,3 +130,11 @@ print("User's accuracy")
 diag(cont_table) / rowSums(cont_table)
 # deforestation        forest
 #     0.3428670     0.9981933
+
+
+
+
+
+TODO: Run validation using the validation.shp
+numeric column = original map class b__s2_1
+column class is the experts colum (reference)

@@ -10,6 +10,10 @@ samples_tb <- "./data/samples/samples.rds" %>%
     readRDS() %>%
     dplyr::select("longitude", "latitude", "start_date", "end_date", "label",
                   "cube", "time_series") %>%
+    (function(x){
+        print(dplyr::count(x, label))
+        invisible(x)
+    }) %>%
     tidyr::unnest(time_series) %>%
     dplyr::mutate(EVI  = 2.5 * (B08 - B04)/(B08 + 6 * B04 - 7.5 * B02 + 1),
                   NDVI = (B08 - B04)/(B08 + B04),
