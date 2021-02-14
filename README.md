@@ -4,7 +4,8 @@ Classification of deforestation using sits and Brazil Data Cubes.
 
 * Cube Sentinel2 077095 STACK.
 * Resolution of 10 meters and 16 days.
-* Classifier in the R package SITS (commit cfe76341c858b5c37d45d44513aefb64b6826e84). 
+* Classifier in the R package SITS (commit 49d9ffa92b72ae35b13ddb6b309aced535ade0e2).   
+
 
 ### TODO:
 

@@ -92,3 +92,24 @@ mini_images <- images_tb %>%
                                                   xmax = xmax,
                                                   ymin = ymin,
                                                   ymax = ymax))
+
+# Test bayesian
+xmin <- 3786086.683
+ymin <- 10096253.986
+xmax <- xmin + 1000
+ymax <- ymin + (10986 * 10)
+mini_images <- images_tb %>%
+    dplyr::select(in_file = file_path) %>%
+    dplyr::mutate(out_file = stringr::str_replace(in_file,
+                                                  pattern = stringr::fixed("./data/cube/077095"),
+                                                  replacement =            "./data/cube/mini_077095_bayes"),
+                  out_dir = purrr::map_lgl(dirname(out_file),
+                                           dir.create,
+                                           recursive = TRUE))  %>%
+    dplyr::mutate(cropped_image = purrr::map2_chr(in_file,
+                                                  out_file,
+                                                  crop_images,
+                                                  xmin = xmin,
+                                                  xmax = xmax,
+                                                  ymin = ymin,
+                                                  ymax = ymax))

@@ -173,7 +173,8 @@ get_cube <- function(cube){
         ~name, ~dir_path,
         "cube",   "/home/alber.ipia/Documents/sits_classify_S2_10_16D_STK_077095/data/cube/077095",
         "mini_1", "/home/alber.ipia/Documents/sits_classify_S2_10_16D_STK_077095/data/cube/mini_077095_1",
-        "mini_2", "/home/alber.ipia/Documents/sits_classify_S2_10_16D_STK_077095/data/cube/mini_077095_2"
+        "mini_2", "/home/alber.ipia/Documents/sits_classify_S2_10_16D_STK_077095/data/cube/mini_077095_2",
+        "mini_bayes", "/home/alber.ipia/Documents/sits_classify_S2_10_16D_STK_077095/data/cube/mini_077095_bayes"
     ) %>%
         ensurer::ensure_that(all(dir.exists(.$dir_path)),
                              err_desc = "Invalid cube directories!")
@@ -233,3 +234,7 @@ is_sits_valid <- function(x){
                              err_desc = "The tibble is not a sits tibble")
     invisible(x)
 }
+
+
+
+
