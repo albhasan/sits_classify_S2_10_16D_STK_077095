@@ -146,8 +146,9 @@ class_vrt <- tempfile(pattern = "class_",
                       fileext = ".vrt")
 gdalUtils::gdalbuildvrt(gdalfile = class_file,
                         output.vrt = class_vrt)
-# NOTE: We're resamplint our 10m classificaton to 30m PRODES. We're reasampling
-#       the finer to the coarser resolution using the mode.
+# NOTE: We're re-sampling our 10m classification to 30m PRODES. We're
+#       resampling the finer to the coarser resolution using the mode as
+#       resampling strategy.
 gdalUtils::gdalwarp(srcfile = class_vrt,
                     dstfile = class_trans,
                     t_srs = "EPSG:4326",
@@ -161,16 +162,21 @@ gdalUtils::gdalwarp(srcfile = class_vrt,
 # Ouput overlay rasters (before recoding labels).
 class_prodes2019_overlay <- "/home/alber.ipia/Documents/sits_classify_S2_10_16D_STK_077095/results/paper_defor/overlay_class_prodes2019.tif"
 class_prodes2020_overlay <- "/home/alber.ipia/Documents/sits_classify_S2_10_16D_STK_077095/results/paper_defor/overlay_class_prodes2020.tif"
+class_prodes_19_20_overlay <- "/home/alber.ipia/Documents/sits_classify_S2_10_16D_STK_077095/results/paper_defor/overlay_class_prodes_19_20.tif"
 
 # Overlay our classification results with PRODES
 cmd_prodes2019 <- sprintf("gdal_calc.py -A %s -B %s --outfile=%s --calc='(A.astype(numpy.int16) * 100) + B.astype(numpy.int16)' --type=Int16 --NoDataValue=-9999 --quiet --co COMPRESS=LZW --co BIGTIFF=YES",
                           class_trans, prodes2019_trans, class_prodes2019_overlay)
 cmd_prodes2020 <- sprintf("gdal_calc.py -A %s -B %s --outfile=%s --calc='(A.astype(numpy.int16) * 100) + B.astype(numpy.int16)' --type=Int16 --NoDataValue=-9999 --quiet --co COMPRESS=LZW --co BIGTIFF=YES",
                           class_trans, prodes2020_trans, class_prodes2020_overlay)
+cmd_prodes_19_20 <- sprintf("gdal_calc.py -A %s -B %s -C %s --outfile=%s --calc='(A.astype(numpy.int16) * 10000) + (B.astype(numpy.int16) * 100) + C.astype(numpy.int16)' --type=Int16 --NoDataValue=-9999 --quiet --co COMPRESS=LZW --co BIGTIFF=YES",
+                          class_trans, prodes2019_trans, prodes2020_trans, class_prodes_19_20_overlay)
 system(cmd_prodes2019)
 system(cmd_prodes2020)
+system(cmd_prodes_19_20)
 stopifnot(file.exists(class_prodes2019_overlay))
 stopifnot(file.exists(class_prodes2020_overlay))
+stopifnot(file.exists(class_prodes_19_20_overlay))
 
 class_prodes2019 <- c(`1`  = "FLORESTA", `2`  = "HIDROGRAFIA", `3`  = "NAO_FLORESTA",
                       `4`  = "NAO_FLORESTA2", `5`  = "NUVEM", `6`  = "d2007",
@@ -289,6 +295,5 @@ diag(cont_table2020) / rowSums(cont_table2020)
 # Compare classification to only the  deforestation of 2020
 
 # Estimate the deforestation difference between our classification and PRODES 2019
-overlay2019_r %>5
 
 # Find the difference in PRODES 2020
