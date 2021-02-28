@@ -10,10 +10,10 @@ library(tibble)
 #---- Set up ----
 
 samples_file <- "./data/samples/alber3_bdc077095.csv"
-samples_abandoned_file <- "./data/samples/abandoned3.shp"
+#samples_abandoned_file <- "./data/samples/abandoned3.shp"
 
 stopifnot(file.exists(samples_file))
-stopifnot(file.exists(samples_abandoned_file))
+#stopifnot(file.exists(samples_abandoned_file))
 
 
 #---- Script -----
@@ -35,17 +35,18 @@ samples_tb <- samples_file %>%
 my_start_date <- samples_tb$start_date[[1]]
 my_end_date   <- samples_tb$end_date[[1]]
 
-samples_tb <- samples_abandoned_file %>%
-    sf::read_sf() %>%
-    add_coords() %>%
-    sf::st_set_geometry(NULL) %>%
-    tibble::as_tibble() %>%
-    dplyr::mutate(start_date = my_start_date,
-                  end_date   = my_end_date,
-                  label = "Abandoned",
-                  id = FID + 100000) %>%
-    dplyr::select(id, longitude, latitude, label, start_date, end_date) %>%
-    dplyr::bind_rows(samples_tb) %>%
+samples_tb <- samples_tb %>%
+    # samples_abandoned_file %>%
+    # sf::read_sf() %>%
+    # add_coords() %>%
+    # sf::st_set_geometry(NULL) %>%
+    # tibble::as_tibble() %>%
+    # dplyr::mutate(start_date = my_start_date,
+    #               end_date   = my_end_date,
+    #               label = "Abandoned",
+    #               id = FID + 100000) %>%
+    # dplyr::select(id, longitude, latitude, label, start_date, end_date) %>%
+    # dplyr::bind_rows(samples_tb) %>%
     dplyr::arrange(id) %>%
     dplyr::mutate(id = 1:nrow(.)) %>%
     dplyr::mutate(id_coords = stringr::str_c(round(longitude, digits = 10),
@@ -59,6 +60,13 @@ samples_tb <- samples_abandoned_file %>%
         print(sum(dplyr::pull(my_count, n)))
         invisible(x)
     })
+# label             n
+# * <chr>         <int>
+# 1 Deforestation   157
+# 2 Forest          415
+# 3 NatNonForest    171
+# 4 Pasture         460
+# [1] 1203
 # label             n
 # 1 Abandoned       208
 # 2 Deforestation   157
@@ -92,6 +100,13 @@ samples_ts <- samples_ts %>%
                   "cube", "time_series")
 samples_ts %>%
     dplyr::count(label)
+# A tibble: 4 x 2
+# label             n
+# * <chr>         <int>
+# 1 Deforestation   157
+# 2 Forest          414
+# 3 NatNonForest    171
+# 4 Pasture         460
 #   label             n
 # 1 Abandoned       208
 # 2 Deforestation   157

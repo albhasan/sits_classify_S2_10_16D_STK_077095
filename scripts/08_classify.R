@@ -1,6 +1,7 @@
 .libPaths("/home/alber.ipia/R/x86_64-pc-linux-gnu-library/4.0")
+Sys.setenv(SITS_USER_CONFIG_FILE = "/home/alber.ipia/Documents/sits_classify_S2_10_16D_STK_077095/config.yml")
 
-library(bmv)
+#library(bmv)
 library(sits)
 library(dplyr)
 library(snow)
@@ -161,40 +162,39 @@ split_clusterR <- function(x, n_tiles, pad_rows, fun,
 }
 
 
-bayes_experiment <- function(b2, window, nu, sigma, covar) {
-    stopifnot(inherits(b2, "RasterBrick"))
-    stopifnot(is.matrix(window))
-    stopifnot(is.matrix(sigma))
-
-
-    d <- unname(raster::values(b2))
-
-    # process
-    ds <- bmv::bayes_multiv_smooth(m = d,
-                                   m_nrow = raster::nrow(b2),
-                                   m_ncol = raster::ncol(b2),
-                                   w = window,
-                                   sigma = sigma,
-                                   nu = nu,
-                                   covar = covar)
-
-    # generate cube smooth
-    bb <- raster::brick(b2, nl = raster::nlayers(b2))
-    bb[] <- ds
-
-    bb
-}
+# bayes_experiment <- function(b2, window, nu, sigma, covar) {
+#     stopifnot(inherits(b2, "RasterBrick"))
+#     stopifnot(is.matrix(window))
+#     stopifnot(is.matrix(sigma))
+#
+#
+#     d <- unname(raster::values(b2))
+#
+#     # process
+#     ds <- bmv::bayes_multiv_smooth(m = d,
+#                                    m_nrow = raster::nrow(b2),
+#                                    m_ncol = raster::ncol(b2),
+#                                    w = window,
+#                                    sigma = sigma,
+#                                    nu = nu,
+#                                    covar = covar)
+#
+#     # generate cube smooth
+#     bb <- raster::brick(b2, nl = raster::nlayers(b2))
+#     bb[] <- ds
+#
+#     bb
+# }
 
 
 
 #---- set up level classification ----
 
 ## Level model (this is for the BIOME)
-classification_name <- "paper_defor2"
+classification_name <- "paper_defor"
 satellite           <- "SENTINEL-2"
 sensor              <- "MSI"
 my_bands            <- c("B02", "B03", "B04", "B08", "B8A",  "B11", "B12")
-#ml_method           <- sits::sits_rfor(num_trees = 2000)
 
 ## Level data (for list of tiles in the BIOME)
 project_dir   <- "/home/alber.ipia/Documents/sits_classify_S2_10_16D_STK_077095"
@@ -220,7 +220,9 @@ stopifnot(length(split_dirs) == length(tile_names))
 split_dir     <- split_dirs[[1]]
 split_out_dir <- split_out_dirs[[1]]
 cube_name     <- tile_names[[1]]
-model_file    <- paste0("./results/", classification_name, "/ml_model.rds")
+model_file    <- paste0("./results/",
+                        classification_name,
+                        "/ml_model.rds")
 
 stopifnot(dir.exists(merge_out_dir))
 if (!dir.exists(split_dir))
@@ -276,139 +278,97 @@ merged_tb <- merge_subtiles(cube_name = cube_name,
                             split_out_dir = split_out_dir,
                             grid = my_grid)
 
+# TODO:
+#     - Test the new way of running the bayesian or the naive classification.
+#     - Use the merged_tb
 
 
 #---- Post processing ----
 
-my_cluster <- snow::makeSOCKcluster(20)
-snow::clusterEvalQ(my_cluster,
-                   .libPaths("/home/alber.ipia/R/x86_64-pc-linux-gnu-library/4.0"))
-classification_r <- split_clusterR(x = raster::brick(merged_tb$merged),
-                                   n_tiles = 100,
-                                   pad_rows = 0,
-                                   fun = raster::which.max,
-                                   filename = paste0(dirname(merged_tb$merged),
-                                                     "/",
-                                                     tools::file_path_sans_ext(basename(merged_tb$merged)),
-                                                     "_which_max.tif"),
-                                   options = "COMPRESS=LZW",
-                                   datatype = "INT1U",
-                                   export = NULL,
-                                   cl = my_cluster,
-                                   overwrite = TRUE)
-snow::stopCluster(my_cluster)
+# my_cluster <- snow::makeSOCKcluster(20)
+# snow::clusterEvalQ(my_cluster,
+#                    .libPaths("/home/alber.ipia/R/x86_64-pc-linux-gnu-library/4.0"))
+# classification_r <- split_clusterR(x = raster::brick(merged_tb$merged),
+#                                    n_tiles = 100,
+#                                    pad_rows = 0,
+#                                    fun = raster::which.max,
+#                                    filename = paste0(dirname(merged_tb$merged),
+#                                                      "/",
+#                                                      tools::file_path_sans_ext(basename(merged_tb$merged)),
+#                                                      "_which_max.tif"),
+#                                    options = "COMPRESS=LZW",
+#                                    datatype = "INT1U",
+#                                    export = NULL,
+#                                    cl = my_cluster,
+#                                    overwrite = TRUE)
+# snow::stopCluster(my_cluster)
 
 
 
 #---- Bayesian post processing ----
 
-stop("TODO: Check parameters with Rolf!")
+# probs_bayes <- sits::smooth(
+#     type = "bayes",
+#     window_size = 5,
+#     smoothness = 20,
+#     covar = FALSE,
+#     multicores = 1,
+#     memsize = 1,
+#     output_dir = getwd(),
+#     version = "v1")
 
-logit <- function(x) {
-    x[x > 0.9999999] <- 0.9999999
-    x[x < 0.0000001] <- 0.0000001
-    return(log(x/(1 - x)))
-}
 
-probs_r <- raster::brick(merged_tb$merged)
-nlayers(probs_r)
 
-logit_r <- lapply(seq_along(names(probs_r)), function(x) {
-    my_raster <- probs_r[[x]]
-    my_raster[] <- logit(my_raster[]/10000)
-    return(my_raster)
-})
-logit_r <- raster::brick(logit_r)
-
-my_window <- raster::focalWeight(logit_r, d = 30, type = "rectangle")
-my_window[my_window > 0] <- 1
-my_window[ceiling(nrow(my_window)/2), ceiling(ncol(my_window)/2)] <- 0
-my_window
-
-sigma_param <- diag(20, 5)
-sigma_param
-
-my_cluster <- snow::makeSOCKcluster(20)
-snow::clusterEvalQ(my_cluster,
-                   .libPaths("/home/alber.ipia/R/x86_64-pc-linux-gnu-library/4.0"))
-
-classification_r <- split_clusterR(x = logit_r,
-                                   n_tiles = 100,
-                                   pad_rows = ceiling(nrow(my_window) / 2) - 1,
-                                   fun = bayes_experiment,
-                                   args = list(window = my_window,
-                                               nu = 1,
-                                               sigma = sigma_param,
-                                               covar = TRUE),
-                                   filename = paste0(dirname(merged_tb$merged),
-                                                     "/",
-                                                     tools::file_path_sans_ext(basename(merged_tb$merged)),
-                                                     "_bayesian_",
-                                                     nrow(my_window),
-                                                     "x",
-                                                     ncol(my_window),
-                                                     ".tif"),
-                                   options = "COMPRESS=LZW",
-                                   datatype = "INT1U",
-                                   export = NULL,
-                                   cl = my_cluster,
-                                   overwrite = TRUE)
-snow::stopCluster(my_cluster)
-
-#-----------------------------------
-# prob_merged <- list.files(split_out_dir,
-#                           pattern = paste0(cube_name, ".*\\.rds$"),
-#                           full.names = TRUE)[[1]] %>%
-#     readRDS()
+# stop("TODO: Check parameters with Rolf!")
 #
-# merged_r <- suppressWarnings(raster::brick(merged_tb$merged))
+# logit <- function(x) {
+#     x[x > 0.9999999] <- 0.9999999
+#     x[x < 0.0000001] <- 0.0000001
+#     return(log(x/(1 - x)))
+# }
 #
-# prob_merged$cube <- cube_name
-# prob_merged$file_info[[1]]$path <- merged_tb$merged
-# prob_merged$file_info[[1]]$date <- merged_tb$date
-# prob_merged$file_info[[1]]$band <- merged_tb$band
-# prob_merged$nrows <- raster::nrow(merged_r)
-# prob_merged$ncols <- raster::ncol(merged_r)
-# prob_merged$xmin  <- raster::xmin(merged_r)
-# prob_merged$ymin  <- raster::ymin(merged_r)
-# prob_merged$xmax  <- raster::xmax(merged_r)
-# prob_merged$ymax  <- raster::ymax(merged_r)
+# probs_r <- raster::brick(merged_tb$merged)
+# nlayers(probs_r)
 #
-# # class_cube <- sits::sits_label_classification(cube = prob_merged,
-# #                                               output_dir = merge_out_dir)
+# logit_r <- lapply(seq_along(names(probs_r)), function(x) {
+#     my_raster <- probs_r[[x]]
+#     my_raster[] <- logit(my_raster[]/10000)
+#     return(my_raster)
+# })
+# logit_r <- raster::brick(logit_r)
+#
+# my_window <- raster::focalWeight(logit_r, d = 30, type = "rectangle")
+# my_window[my_window > 0] <- 1
+# my_window[ceiling(nrow(my_window)/2), ceiling(ncol(my_window)/2)] <- 0
+# my_window
+#
+# sigma_param <- diag(20, 5)
+# sigma_param
 #
 # my_cluster <- snow::makeSOCKcluster(20)
 # snow::clusterEvalQ(my_cluster,
 #                    .libPaths("/home/alber.ipia/R/x86_64-pc-linux-gnu-library/4.0"))
-# res <- split_clusterR(x = raster::brick(merged_tb$merged),
-#                       n_tiles = 34,
-#                       pad_rows = 1,
-#                       fun = sits::sits_smooth,
-#                       args = list(cube = prob_merged,
-#                                   type = "bayes",
-#                                   window_size = 5,
-#                                   smoothness = 20,
-#                                   output_dir = merge_out_dir),
-#                       export = NULL,
-#                       cl = my_cluster)
+#
+# classification_r <- split_clusterR(x = logit_r,
+#                                    n_tiles = 100,
+#                                    pad_rows = ceiling(nrow(my_window) / 2) - 1,
+#                                    fun = bayes_experiment,
+#                                    args = list(window = my_window,
+#                                                nu = 1,
+#                                                sigma = sigma_param,
+#                                                covar = TRUE),
+#                                    filename = paste0(dirname(merged_tb$merged),
+#                                                      "/",
+#                                                      tools::file_path_sans_ext(basename(merged_tb$merged)),
+#                                                      "_bayesian_",
+#                                                      nrow(my_window),
+#                                                      "x",
+#                                                      ncol(my_window),
+#                                                      ".tif"),
+#                                    options = "COMPRESS=LZW",
+#                                    datatype = "INT1U",
+#                                    export = NULL,
+#                                    cl = my_cluster,
+#                                    overwrite = TRUE)
 # snow::stopCluster(my_cluster)
 #
-#
-# sprintf(paste0("split_dir     : %s \n",
-#                "split_out_dir : %s \n",
-#                "my_bands      : %s \n",
-#                "cube_name     : %s \n",
-#                "satellite     : %s \n",
-#                "sensor        : %s \n",
-#                "model_file    : %s \n",
-#                "labels        : %s"),
-#         split_dir,
-#         split_out_dir,
-#         paste(my_bands, collapse = ", "),
-#         cube_name,
-#         satellite,
-#         sensor,
-#         model_file,
-#         paste(sort(unique(environment(ml_model)$data$label)),
-#               collapse = ", ")) %>%
-#     cat(file = paste0(merge_out_dir, "/metadata.txt"))
