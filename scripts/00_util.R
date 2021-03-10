@@ -238,3 +238,66 @@ is_sits_valid <- function(x){
 
 
 
+
+#' Helper function to obtain a tibble of reference and predicted values.
+#'
+#' @param sf_obj       A sf object (points).
+#' @param class_labels A character of labels used for the classification.
+#' @return             A tibble of observations with reference and predicted
+#'                     labels.
+get_ref_pred <- function(sf_obj, class_labels){
+    sf_obj %>%
+        sf::st_as_sf() %>%
+        add_coords() %>%
+        sf::st_set_geometry(NULL) %>%
+        tibble::as_tibble() %>%
+        dplyr::select(dplyr::last_col(offset = 0:3)) %>%
+        dplyr::rename(reference = class) %>%
+        dplyr::select(longitude, latitude, reference, tidyselect::everything()) %>%
+        magrittr::set_names(c("longitude", "latitude", "reference", "predicted")) %>%
+        dplyr::mutate(predicted = dplyr::recode(predicted,
+                                                !!!class_labels,
+                                                .default = NA_character_)) %>%
+        ensurer::ensure_that(!all(is.na(.$predicted)),
+                             !all(is.na(.$reference)),
+                             err_desc = "NA are not allowed!") %>%
+        ensurer::ensure_that(all(unique(.$reference) %in% unique(.$predicted)),
+                             all(unique(.$predicted) %in% unique(.$reference)),
+                                 err_desc = "Label missmatch!") %>%
+        dplyr::mutate(reference = factor(reference, levels = class_labels),
+                      predicted = factor(predicted, levels = class_labels)) %>%
+        return()
+}
+
+
+
+#' Helper function to get a confusion matrix object.
+#'
+#' @param x A tibble of observations with reference and predicted labels.
+#' @return  A caret's confusion matrix object.
+get_conmat <- function(x){
+    caret::confusionMatrix(data      = x$predicted,
+                           reference = x$reference)
+}
+
+#' Helper function to get a confusion matrix out of a caret's object.
+#'
+#' @param x A caret's confusion matrix object.
+#' @return  A integer matrix.
+get_mt <- function(x){
+    return(as.matrix(x$table))
+}
+
+#' Helper function for computing accuracy from a confusion matrix.
+#'
+#' @param cm_mt A confusion matrix.
+#' @return      A tibble with overall, producer and user accuracies.
+get_accuracies <- function(cm_mt){
+    overall <- sum(diag(cm_mt)) / sum(colSums(cm_mt))
+    prod <- diag(cm_mt) / colSums(cm_mt)
+    user <- diag(cm_mt) / rowSums(cm_mt)
+    names(overall) <- "overall"
+    names(prod) <- paste0("prod_", names(prod))
+    names(user) <- paste0("user_", names(user))
+    return(tibble::as_tibble(t(c(overall, prod, user))))
+}

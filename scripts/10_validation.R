@@ -1,7 +1,10 @@
 # Validate the results of the classification
 library(caret)
 library(dplyr)
+library(ensurer)
 library(gdalUtils)
+library(knitr)
+library(purrr)
 library(raster)
 library(sf)
 
@@ -9,22 +12,6 @@ library(sf)
 
 #---- Configuration ----
 
-prodes2019_file <- "./data/prodes/2019/PDigital2000_2019_AMZ_gtif_077095.tif"
-prodes2020_file <- "./data/prodes/2020/PDigital2000_2020_AMZ_077095.tif"
-gfw_file    <- "./data/global_forest_watch/Hansen_GFC-2019-v1.7_lossyear_10S_070W_077095.tif"
-
-# Classification result files
-# - without post-processing
-#class_file  <- "./results/paper_defor2/S2_10_16D_STK_077095_probs_2018_7_which_max.tif"
-# - bayesian smoothing with a 3x3 window and no assuming no covariance among classes.
-class_file  <- "./results/paper_defor/bmv_map_w3_nu1_covFALSE.tif"
-
-stopifnot(file.exists(class_file))
-stopifnot(file.exists(prodes2019_file))
-stopifnot(file.exists(prodes2020_file))
-stopifnot(file.exists(gfw_file))
-
-source("./scripts/00_util.R")
 
 class_labels <- c(`1` = "Deforestation",
                   `2` = "Forest",
@@ -33,6 +20,12 @@ class_labels <- c(`1` = "Deforestation",
 # class_labels <- c(`1` = "Abandoned", `2` = "Deforestation", `3` = "Forest",
 #                   `4` = "NatNonForest", `5` = "Pasture")
 
+classification_dir <- "./results/paper_defor"
+stopifnot(dir.exists(classification_dir))
+
+
+source("./scripts/00_util.R")
+
 
 
 #---- Validation using Olofson's method ----
@@ -40,12 +33,14 @@ class_labels <- c(`1` = "Deforestation",
 validation_shp <- "./data/validation/validation.shp"
 stopifnot(file.exists(validation_shp))
 
+# Read the validation points.
 validation_sf <- validation_shp %>%
     sf::read_sf() %>%
-    ensurer::ensure_that(all(class_labels %in% unique(.$class)),
-                         err_desc = "Label missmatch!") %>%
-    dplyr::filter(class %in% class_labels) #dplyr::filter(class != "Abandoned")
-
+    ensurer::ensure_that(all(class_labels %in% .$class),
+                         err_des = "Unknown labels found!") %>%
+    dplyr::filter(class %in% class_labels) %>%
+    ensurer::ensure_that(length(unique(.$class)) >= length(class_labels),
+                         err_desc = "Unsampled labels!")
 # Print the number of samples.
 validation_sf %>%
     sf::st_set_geometry(NULL) %>%
@@ -58,242 +53,702 @@ validation_sf %>%
         invisible(x)
     })
 
-class_r <- class_file %>%
-    raster::raster()
-
-# Get the predicted label for the validation points.
-validation_tb <- raster::extract(class_r,
-                                 as(validation_sf, "Spatial"),
-                                 cellnumberes = FALSE,
-                                 sp = TRUE) %>%
-    sf::st_as_sf() %>%
-    add_coords() %>%
-    sf::st_set_geometry(NULL) %>%
+# Read the classification rasters processed with different bayesian smoothers.
+classification_tb <- classification_dir %>%
+    list.files(pattern = "^paper_defor_(bayes|bilin)_class.+[.]tif$",
+               recursive = TRUE,
+               full.names = TRUE) %>%
     tibble::as_tibble() %>%
-    dplyr::select(dplyr::last_col(offset = 0:3)) %>%
-    dplyr::rename(reference = class) %>%
-    dplyr::select(longitude,  latitude,  reference,  tidyselect::everything()) %>%
-    magrittr::set_names(c("longitude", "latitude", "reference", "predicted")) %>%
-    dplyr::mutate(predicted = dplyr::recode(predicted,
-                                            !!!class_labels,
-                                            .default = NA_character_)) %>%
-    ensurer::ensure_that(!all(is.na(.$predicted)),
-                         !all(is.na(.$reference)),
-                         err_desc = "NAs are not allowed!") %>%
-    ensurer::ensure_that(all(unique(.$reference) %in% unique(.$predicted)),
-                         all(unique(.$predicted) %in% unique(.$reference)),
-                         err_desc = "Label mismatch!") %>%
-    dplyr::mutate(reference = factor(reference,
-                                     levels = class_labels),
-                  predicted = factor(predicted,
-                                     levels = class_labels))
+    dplyr::rename(file_path = value) %>%
+    dplyr::mutate(smooth = file_path %>%
+                      dirname() %>%
+                      basename())
 
-# Compute the confusion matrices.
-con_mat <- caret::confusionMatrix(data      = validation_tb$predicted,
-                                  reference = validation_tb$reference)
-cm_mt <-  as.matrix(con_mat$table)
-print(con_mat)
 
-# Overall accuracy
-sum(diag(cm_mt)) / sum(colSums(cm_mt))
+classification_tb <- classification_tb %>%
+    dplyr::mutate(class_r = purrr::map(file_path, raster::raster),
+                  validation = purrr::map(class_r, raster::extract,
+                                          y = as(validation_sf, "Spatial"),
+                                          cellnumbers = FALSE,
+                                          sp = TRUE),
+                  ref_pred = purrr::map(validation, get_ref_pred,
+                                        class_labels = class_labels),
+                  confmat_obj = purrr::map(ref_pred, get_conmat),
+                  conmat = purrr::map(confmat_obj, get_mt),
+                  acc  = purrr::map(conmat, get_accuracies))
 
-# Producer's accuracy
-diag(cm_mt) / colSums(cm_mt)
-
-# User's accuracy
-diag(cm_mt) / rowSums(cm_mt)
-
-# Save the missclassified points to a shapefile.
-# validation_tb %>%
-#     dplyr::filter(reference == "Forest",
-#                   predicted == "Abandoned") %>%
-#     sf::st_as_sf(coords = c("longitude", "latitude")) %>%
-#     sf::st_set_crs(raster::crs(class_r)) %>%
-#     sf::write_sf("./data/validation/validation_error.shp")
+# Print the accuracies.
+classification_tb %>%
+    dplyr::select(smooth, acc) %>%
+    dplyr::arrange(smooth) %>%
+    tidyr::unnest(acc) %>%
+    knitr::kable(digits = 2)
 
 
 
 #---- Compare our classification to PRODES -----
 
-# Pre-process PRODES.
-prodes2019_trans <- tempfile(pattern = "prodes2019_wgs84_", fileext = ".tif")
-prodes2020_trans <- tempfile(pattern = "prodes2020_wgs84_", fileext = ".tif")
+#my_smoother <- "5x5_bayes"
+my_smoother <- "9x9_bilinear"
 
-# Project PRODES to WGS84.
-gdalUtils::gdalwarp(srcfile = prodes2019_file,
-                    dstfile = prodes2019_trans,
-                    t_srs = "EPSG:4326",
-                    co = c("COMPRESS=LZW", "BIGTIFF=YES"),
-                    tr = c(0.000268987056828,-0.000269018801881),
-                    te = c(-65.23432383171814308, -10.92505295837335844,
-                           -63.71562290886634372, -10.00312552432653312),
-                    r = "near",
-                    ot = "Int16")
-gdalUtils::gdalwarp(srcfile = prodes2020_file,
-                    dstfile = prodes2020_trans,
-                    t_srs = "EPSG:4326",
-                    co = c("COMPRESS=LZW", "BIGTIFF=YES"),
-                    tr = c(0.000268987056828,-0.000269018801881),
-                    te = c(-65.23432383171814308, -10.92505295837335844,
-                           -63.71562290886634372, -10.00312552432653312),
-                    r = "near",
-                    ot = "Int16")
+prodes_dir <- "./data/prodes/yearly_deforestation_biome/077095"
+stopifnot(dir.exists(prodes_dir))
 
-# Project our classification results to WGS84.
-class_trans <- tempfile(pattern = "class_wgs84_",
-                        fileext = ".tif")
-class_vrt <- tempfile(pattern = "class_",
-                      fileext = ".vrt")
-gdalUtils::gdalbuildvrt(gdalfile = class_file,
-                        output.vrt = class_vrt)
-# NOTE: We're re-sampling our 10m classification to 30m PRODES. We're
-#       resampling the finer to the coarser resolution using the mode as
-#       resampling strategy.
-gdalUtils::gdalwarp(srcfile = class_vrt,
-                    dstfile = class_trans,
-                    t_srs = "EPSG:4326",
-                    co = c("COMPRESS=LZW", "BIGTIFF=YES"),
-                    tr = c(0.000268987056828,-0.000269018801881),
-                    te = c(-65.23432383171814308, -10.92505295837335844,
-                           -63.71562290886634372, -10.00312552432653312),
-                    r = "mode",
-                    ot = "Int16")
+smoother_tb <- classification_tb %>%
+    dplyr::select(file_path, smooth, class_r) %>%
+    dplyr::mutate(class_crs = purrr::map(class_r, raster::crs)) %>%
+    dplyr::filter(smooth == my_smoother) %>%
+    ensurer::ensure_that(nrow(.) == 1,
+                         err_desc = "Only one classification raster is expected!")
 
-# Ouput overlay rasters (before recoding labels).
-class_prodes2019_overlay <- "/home/alber.ipia/Documents/sits_classify_S2_10_16D_STK_077095/results/paper_defor/overlay_class_prodes2019.tif"
-class_prodes2020_overlay <- "/home/alber.ipia/Documents/sits_classify_S2_10_16D_STK_077095/results/paper_defor/overlay_class_prodes2020.tif"
-class_prodes_19_20_overlay <- "/home/alber.ipia/Documents/sits_classify_S2_10_16D_STK_077095/results/paper_defor/overlay_class_prodes_19_20.tif"
+#' Helper function for writing an sf object to a temporal file
+#'
+#' @param x An sf objet.
+#' @retun A character. Path to a temporal shp file.
+sf_to_tmp <- function(x){
+    tmp_file <- tempfile(pattern = "prodes_proj_",
+                         fileext = ".shp")
+    x %>%
+        dplyr::mutate(ID = as.integer(ID)) %>%
+        sf::write_sf(dsn = tmp_file)
+    return(tmp_file)
+}
 
-# Overlay our classification results with PRODES
-cmd_prodes2019 <- sprintf("gdal_calc.py -A %s -B %s --outfile=%s --calc='(A.astype(numpy.int16) * 100) + B.astype(numpy.int16)' --type=Int16 --NoDataValue=-9999 --quiet --co COMPRESS=LZW --co BIGTIFF=YES",
-                          class_trans, prodes2019_trans, class_prodes2019_overlay)
-cmd_prodes2020 <- sprintf("gdal_calc.py -A %s -B %s --outfile=%s --calc='(A.astype(numpy.int16) * 100) + B.astype(numpy.int16)' --type=Int16 --NoDataValue=-9999 --quiet --co COMPRESS=LZW --co BIGTIFF=YES",
-                          class_trans, prodes2020_trans, class_prodes2020_overlay)
-cmd_prodes_19_20 <- sprintf("gdal_calc.py -A %s -B %s -C %s --outfile=%s --calc='(A.astype(numpy.int16) * 10000) + (B.astype(numpy.int16) * 100) + C.astype(numpy.int16)' --type=Int16 --NoDataValue=-9999 --quiet --co COMPRESS=LZW --co BIGTIFF=YES",
-                          class_trans, prodes2019_trans, prodes2020_trans, class_prodes_19_20_overlay)
-system(cmd_prodes2019)
-system(cmd_prodes2020)
-system(cmd_prodes_19_20)
-stopifnot(file.exists(class_prodes2019_overlay))
-stopifnot(file.exists(class_prodes2020_overlay))
-stopifnot(file.exists(class_prodes_19_20_overlay))
-
-class_prodes2019 <- c(`1`  = "FLORESTA", `2`  = "HIDROGRAFIA", `3`  = "NAO_FLORESTA",
-                      `4`  = "NAO_FLORESTA2", `5`  = "NUVEM", `6`  = "d2007",
-                      `7`  = "d2008", `8`  = "d2009", `9`  = "d2010", `10` = "d2011",
-                      `11` = "d2012", `12` = "d2013", `13` = "d2014", `14` = "d2015",
-                      `15` = "d2016", `16` = "d2017", `17` = "d2018", `18` = "r2010",
-                      `19` = "r2011", `20` = "r2012", `21` = "r2013", `22` = "r2014",
-                      `23` = "r2015", `24` = "r2016", `25` = "r2017", `26` = "r2018",
-                      `27` = "d2019", `28` = "NUVEM2019")
-class_prodes2020 <- c(`1`  = "FLORESTA", `2`  = "HIDROGRAFIA", `3`  = "NAO FLORESTA" ,
-                      `4`  = "NAO FLORESTA2", `6`  = "d2007", `7`  = "d2008",
-                      `8`  = "d2009", `9`  = "d2010", `10` = "d2011", `11` = "d2012",
-                      `12` = "d2013", `13` = "d2014", `14` = "d2015", `15` = "d2016",
-                      `16` = "d2017", `17` = "d2018", `18` = "r2010", `19` = "r2011",
-                      `20` = "r2012", `21` = "r2013", `22` = "r2014", `23` = "r2015",
-                      `24` = "r2016", `25` = "r2017", `26` = "r2018", `27` = "d2019",
-                      `28` = "r2019", `29` = "d2020", `30` = "NUVEM")
-
-overlay2019_r <- raster::raster(class_prodes2019_overlay)
-overlay2020_r <- raster::raster(class_prodes2020_overlay)
-
-overlay2019_table <- table(overlay2019_r[])
-overlay2020_table <- table(overlay2020_r[])
-
-count2019_tb <- overlay2019_table %>%
-    as.data.frame() %>%
+prodes_tb <- prodes_dir %>%
+    list.files(pattern = ".shp",
+               full.names = TRUE) %>%
     tibble::as_tibble() %>%
-    dplyr::mutate(value= as.integer(as.character(Var1)),
-                  predicted = as.integer(floor(value/100)),
-                  reference = as.integer(value - (predicted * 100))) %>%
-    ensurer::ensure_that(all(.$value > 100),
-                         all(.$value < 1000),
-                         err_desc = "Found malformed class ids") %>%
-    dplyr::rename(frequency = Freq) %>%
-    dplyr::select(predicted, reference, frequency) %>%
-    dplyr::mutate(predicted = dplyr::recode(predicted, !!!class_labels),
-                  reference = dplyr::recode(reference, !!!class_prodes2019)) %>%
-    dplyr::mutate(predicted = dplyr::recode(predicted,
-                                            "Deforestation" = "Deforestation",
-                                            "Forest"        = "Forest",
-                                            #"natNonForest",
-                                            "Pasture"       = "Deforestation",
-                                            .default = NA_character_)) %>%
-    dplyr::mutate(reference = dplyr::recode(reference,
-                                            "FLORESTA" = "Forest",
-                                            "d2019" = "Deforestation",
-                                            .default = NA_character_)) %>%
-    dplyr::mutate(predicted = factor(predicted),
-                  reference = factor(reference)) %>%
-    tidyr::drop_na()
-count2020_tb <- overlay2020_table %>%
-    as.data.frame() %>%
-    tibble::as_tibble() %>%
-    dplyr::mutate(value= as.integer(as.character(Var1)),
-                  predicted = as.integer(floor(value/100)),
-                  reference = as.integer(value - (predicted * 100))) %>%
-    ensurer::ensure_that(all(.$value > 100),
-                         all(.$value < 1000),
-                         err_desc = "Found malformed class ids") %>%
-    dplyr::rename(frequency = Freq) %>%
-    dplyr::select(predicted, reference, frequency) %>%
-    dplyr::mutate(predicted = dplyr::recode(predicted, !!!class_labels),
-                  reference = dplyr::recode(reference, !!!class_prodes2020)) %>%
-    dplyr::mutate(predicted = dplyr::recode(predicted,
-                                            "Deforestation" = "Deforestation",
-                                            "Forest"        = "Forest",
-                                            #"natNonForest",
-                                            "Pasture"       = "Deforestation",
-                                            .default = NA_character_)) %>%
-    dplyr::mutate(reference = dplyr::recode(reference,
-                                            "FLORESTA" = "Forest",
-                                            "d2020" = "Deforestation",
-                                            .default = NA_character_)) %>%
-    dplyr::mutate(predicted = factor(predicted),
-                  reference = factor(reference)) %>%
+    dplyr::rename(file_path = value) %>%
+    dplyr::mutate(name = file_path %>%
+                      tools::file_path_sans_ext() %>%
+                      basename()) %>%
+    dplyr::filter(name == "yearly_deforestation_biome") %>%
+    dplyr::mutate(sf = purrr::map(file_path, sf::read_sf)) %>%
+    # Ensure unique IDs.
+    dplyr::mutate(n_features = purrr::map_int(sf, nrow),
+                  unique_id  = purrr::map_int(sf, function(x){length(unique(x$ID))})) %>%
+    ensurer::ensure_that(all(.$unique_id == .$n_features),
+                         err_desc = "IDs aren't unique!") %>%
+    dplyr::select(-n_features, -unique_id) %>%
+    # Project to the classification's crs
+    dplyr::mutate(sf_proj = purrr::map(sf,
+                                       sf::st_transform,
+                                       crs = smoother_tb$class_crs[[1]])) %>%
+    dplyr::mutate(sf_proj_file = purrr::map(sf_proj, sf_to_tmp))
+
+class_extent <- raster::extent(smoother_tb$class_r[[1]])
+class_resolution <- raster::res(smoother_tb$class_r[[1]])
+
+
+# rasterization!!!
+prodes_tb <- prodes_tb %>%
+    dplyr::mutate(sf_rasterized = purrr::map(name, function(x){
+        return(tempfile(pattern = "prodes_rasterized_",
+                        fileext = ".tif"))
+    })) %>%
+    dplyr::mutate(class_masked = purrr::map2(sf_proj_file,
+                                             sf_rasterized,
+                                             gdalUtils::gdal_rasterize,
+                                             a = "ID",
+                                             of = "GTiff",
+                                             co = c("COMPRESS=LZW",
+                                                    "BIGTIFF=YES"),
+                                             a_nodata = -9999,
+                                             init     = -9999,
+                                             te = c(class_extent@xmin,
+                                                    class_extent@ymin,
+                                                    class_extent@xmax,
+                                                    class_extent@ymax),
+                                             tr = class_resolution,
+                                             ot = "Int32",
+                                             output_Raster = TRUE))
+
+# TODO: Convert to a map in a mutate of prodes_tb.
+masked_tb <- tibble::tibble(prodes_id = as.vector(prodes_tb$class_masked[[1]][]),
+                            classification = smoother_tb$class_r[[1]][]) %>%
+    magrittr::set_names(c("prodes_id", "classification")) %>%
+    dplyr::arrange(prodes_id)
+
+# Helper for computing the mode.
+# NOTE: R doesn't already have a mode?
+getMode <- function(x) {
+    keys <- unique(x)
+    keys[which.max(tabulate(match(x, keys)))]
+}
+
+
+# Most common classification class in each Prodes polygon.
+class_by_prodes <- masked_tb %>%
+    dplyr::group_by(prodes_id) %>%
+    dplyr::summarise(mode = getMode(classification)) %>%
+    dplyr::mutate(class_mode = dplyr::recode(mode, !!!class_labels))
+
+prodes_class_sf <- prodes_tb$sf[[1]] %>%
+    dplyr::left_join(class_by_prodes, by = c("ID" = "prodes_id"))
+
+saveRDS(prodes_class_sf,
+        file = paste0("class_by_prodes_", my_smoother, ".rds"))
+
+acc_2019 <- prodes_class_sf %>%
+    sf::st_set_geometry(NULL) %>%
+    dplyr::filter(CLASS_NAME == "d2019") %>%
+    dplyr::mutate(reference = dplyr::recode(MAIN_CLASS,
+                                            "DESMATAMENTO" = "deforestation",
+                                            .default = NA_character_),
+                  predicted = tolower(class_mode)) %>%
+    dplyr::select(reference, predicted) %>%
     tidyr::drop_na()
 
-cont_table2019 <- xtabs(frequency ~ predicted + reference , data = data.frame(count2019_tb))
-cont_table2020 <- xtabs(frequency ~ predicted + reference , data = data.frame(count2020_tb))
-cont_table2019
-#                              reference
-# predicted       deforestation_2019  forest
-# deforestation               163492  313346
-# forest                       15561 8597166
-cont_table2020
-#                              reference
-# predicted       Deforestation  Forest
-# Deforestation           41378  272768
-# Forest                  98026 8499622
+my_levels <- acc_2019 %>%
+    as.matrix() %>%
+    as.vector() %>%
+    unique() %>%
+    sort()
+
+caret::confusionMatrix(data =      factor(acc_2019$predicted,
+                                          levels = my_levels),
+                       reference = factor(acc_2019$reference,
+                                          levels = my_levels))
+
+prodes_class_sf %>%
+    dplyr::filter(CLASS_NAME == "d2019") %>%
+    dplyr::mutate(reference = dplyr::recode(MAIN_CLASS,
+                                            "DESMATAMENTO" = "deforestation",
+                                            .default = NA_character_),
+                  predicted = tolower(class_mode)) %>%
+    dplyr::mutate(match = reference == predicted) %>%
+    dplyr::select(reference, predicted, match) %>%
+    sf::write_sf(paste0("deforestation_prodes_classification", my_smoother,
+                        ".shp"))
 
 
-print("Overall accuracy")
-sum(diag(cont_table2019)) / sum(colSums(cont_table2019))
-# 0.9638149
-print("Producer's accuracy")
-diag(cont_table2019) / colSums(cont_table2019)
-# deforestation_2019             forest
-#          0.9130928          0.9648341
-print("User's accuracy")
-diag(cont_table2019) / rowSums(cont_table2019)
-# deforestation        forest
-#     0.3428670     0.9981933
+#---- 5x5 bayes ----
+# Confusion Matrix and Statistics
+#
+# Reference
+# Prediction      deforestation forest natnonforest pasture
+# deforestation           552      0            0       0
+# forest                    4      0            0       0
+# natnonforest              2      0            0       0
+# pasture                 139      0            0       0
+#
+# Overall Statistics
+#
+# Accuracy : 0.792
+# 95% CI : (0.7599, 0.8215)
+# No Information Rate : 1
+# P-Value [Acc > NIR] : 1
+#
+# Kappa : 0
+#
+# Mcnemar's Test P-Value : NA
+#
+# Statistics by Class:
+#
+#                      Class: deforestation Class: forest Class: natnonforest Class: pasture
+# Sensitivity                         0.792            NA                  NA             NA
+# Specificity                            NA      0.994261            0.997131         0.8006
+# Pos Pred Value                         NA            NA                  NA             NA
+# Neg Pred Value                         NA            NA                  NA             NA
+# Prevalence                          1.000      0.000000            0.000000         0.0000
+# Detection Rate                      0.792      0.000000            0.000000         0.0000
+# Detection Prevalence                0.792      0.005739            0.002869         0.1994
+# Balanced Accuracy                      NA            NA                  NA
 
-print("Overall accuracy")
-sum(diag(cont_table2020)) / sum(colSums(cont_table2020))
-# 0.9583929
-print("Producer's accuracy")
-diag(cont_table2020) / colSums(cont_table2020)
-# Deforestation_2020        Forest
-# 0.2968208                 0.9689061
-print("User's accuracy")
-diag(cont_table2020) / rowSums(cont_table2020)
-# Deforestation_2020        Forest
-# 0.1317158                 0.9885985
+#---- 9x9 bayes ----
+# Confusion Matrix and Statistics
+#
+# Reference
+# Prediction      deforestation forest natnonforest pasture
+# deforestation           545      0            0       0
+# forest                    8      0            0       0
+# natnonforest              4      0            0       0
+# pasture                 140      0            0       0
+#
+# Overall Statistics
+#
+# Accuracy : 0.7819
+# 95% CI : (0.7494, 0.812)
+# No Information Rate : 1
+# P-Value [Acc > NIR] : 1
+#
+# Kappa : 0
+#
+# Mcnemar's Test P-Value : NA
+#
+# Statistics by Class:
+#
+#                      Class: deforestation Class: forest Class: natnonforest Class: pasture
+# Sensitivity                        0.7819            NA                  NA             NA
+# Specificity                            NA       0.98852            0.994261         0.7991
+# Pos Pred Value                         NA            NA                  NA             NA
+# Neg Pred Value                         NA            NA                  NA             NA
+# Prevalence                         1.0000       0.00000            0.000000         0.0000
+# Detection Rate                     0.7819       0.00000            0.000000         0.0000
+# Detection Prevalence               0.7819       0.01148            0.005739         0.2009
+# Balanced Accuracy                      NA            NA                  NA
+#
+#---- 15x15 bayes ----
+# Confusion Matrix and Statistics
+#
+# Reference
+# Prediction      deforestation forest natnonforest pasture
+# deforestation           540      0            0       0
+# forest                   14      0            0       0
+# natnonforest              4      0            0       0
+# pasture                 139      0            0       0
+#
+# Overall Statistics
+#
+# Accuracy : 0.7747
+# 95% CI : (0.7419, 0.8053)
+# No Information Rate : 1
+# P-Value [Acc > NIR] : 1
+#
+# Kappa : 0
+#
+# Mcnemar's Test P-Value : NA
+#
+# Statistics by Class:
+#
+#                      Class: deforestation Class: forest Class: natnonforest
+# Sensitivity                        0.7747            NA                  NA
+# Specificity                            NA       0.97991            0.994261
+# Pos Pred Value                         NA            NA                  NA
+# Neg Pred Value                         NA            NA                  NA
+# Prevalence                         1.0000       0.00000            0.000000
+# Detection Rate                     0.7747       0.00000            0.000000
+# Detection Prevalence               0.7747       0.02009            0.005739
+# Balanced Accuracy                      NA            NA                  NA
+#                      Class: pasture
+# Sensitivity                      NA
+# Specificity                  0.8006
+# Pos Pred Value                   NA
+# Neg Pred Value                   NA
+# Prevalence                   0.0000
+# Detection Rate               0.0000
+# Detection Prevalence         0.1994
+# Balanced Accuracy                NA
+#
+#---- 19x19 bayes ----
+# Confusion Matrix and Statistics
+#
+# Reference
+# Prediction      deforestation forest natnonforest pasture
+# deforestation           524      0            0       0
+# forest                   21      0            0       0
+# natnonforest              4      0            0       0
+# pasture                 148      0            0       0
+#
+# Overall Statistics
+#
+# Accuracy : 0.7518
+# 95% CI : (0.718, 0.7835)
+# No Information Rate : 1
+# P-Value [Acc > NIR] : 1
+#
+# Kappa : 0
+#
+# Mcnemar's Test P-Value : NA
+#
+# Statistics by Class:
+#
+#                      Class: deforestation Class: forest Class: natnonforest
+# Sensitivity                        0.7518            NA                  NA
+# Specificity                            NA       0.96987            0.994261
+# Pos Pred Value                         NA            NA                  NA
+# Neg Pred Value                         NA            NA                  NA
+# Prevalence                         1.0000       0.00000            0.000000
+# Detection Rate                     0.7518       0.00000            0.000000
+# Detection Prevalence               0.7518       0.03013            0.005739
+# Balanced Accuracy                      NA            NA                  NA
+#                      Class: pasture
+# Sensitivity                      NA
+# Specificity                  0.7877
+# Pos Pred Value                   NA
+# Neg Pred Value                   NA
+# Prevalence                   0.0000
+# Detection Rate               0.0000
+# Detection Prevalence         0.2123
+# Balanced Accuracy                NA
+#
+#---- 25x25 bayes ----
+# Confusion Matrix and Statistics
+#
+# Reference
+# Prediction      deforestation forest natnonforest pasture
+# deforestation           497      0            0       0
+# forest                   43      0            0       0
+# natnonforest              4      0            0       0
+# pasture                 153      0            0       0
+#
+# Overall Statistics
+#
+# Accuracy : 0.7131
+# 95% CI : (0.6779, 0.7464)
+# No Information Rate : 1
+# P-Value [Acc > NIR] : 1
+#
+# Kappa : 0
+#
+# Mcnemar's Test P-Value : NA
+#
+# Statistics by Class:
+#
+#                      Class: deforestation Class: forest Class: natnonforest
+# Sensitivity                        0.7131            NA                  NA
+# Specificity                            NA       0.93831            0.994261
+# Pos Pred Value                         NA            NA                  NA
+# Neg Pred Value                         NA            NA                  NA
+# Prevalence                         1.0000       0.00000            0.000000
+# Detection Rate                     0.7131       0.00000            0.000000
+# Detection Prevalence               0.7131       0.06169            0.005739
+# Balanced Accuracy                      NA            NA                  NA
+#                      Class: pasture
+# Sensitivity                      NA
+# Specificity                  0.7805
+# Pos Pred Value                   NA
+# Neg Pred Value                   NA
+# Prevalence                   0.0000
+# Detection Rate               0.0000
+# Detection Prevalence         0.2195
+# Balanced Accuracy                NA
+#
+#---- 5x5 bilinear ----
+# Confusion Matrix and Statistics
+#
+# Reference
+# Prediction      deforestation forest natnonforest pasture
+# deforestation           551      0            0       0
+# forest                    4      0            0       0
+# natnonforest              3      0            0       0
+# pasture                 139      0            0       0
+#
+# Overall Statistics
+#
+# Accuracy : 0.7905
+# 95% CI : (0.7584, 0.8202)
+# No Information Rate : 1
+# P-Value [Acc > NIR] : 1
+#
+# Kappa : 0
+#
+# Mcnemar's Test P-Value : NA
+#
+# Statistics by Class:
+#
+#                      Class: deforestation Class: forest Class: natnonforest Class: pasture
+# Sensitivity                        0.7905            NA                  NA             NA
+# Specificity                            NA      0.994261            0.995696         0.8006
+# Pos Pred Value                         NA            NA                  NA             NA
+# Neg Pred Value                         NA            NA                  NA             NA
+# Prevalence                         1.0000      0.000000            0.000000         0.0000
+# Detection Rate                     0.7905      0.000000            0.000000         0.0000
+# Detection Prevalence               0.7905      0.005739            0.004304         0.1994
+# Balanced Accuracy                      NA            NA                  NA             NA
+#
+#---- 9x9 bilinear ----
+# Confusion Matrix and Statistics
+#
+# Reference
+# Prediction      deforestation forest natnonforest pasture
+# deforestation           551      0            0       0
+# forest                    4      0            0       0
+# natnonforest              3      0            0       0
+# pasture                 139      0            0       0
+#
+# Overall Statistics
+#
+# Accuracy : 0.7905
+# 95% CI : (0.7584, 0.8202)
+# No Information Rate : 1
+# P-Value [Acc > NIR] : 1
+#
+# Kappa : 0
+#
+# Mcnemar's Test P-Value : NA
+#
+# Statistics by Class:
+#
+#                      Class: deforestation Class: forest Class: natnonforest Class: pasture
+# Sensitivity                        0.7905            NA                  NA             NA
+# Specificity                            NA      0.994261            0.995696         0.8006
+# Pos Pred Value                         NA            NA                  NA             NA
+# Neg Pred Value                         NA            NA                  NA             NA
+# Prevalence                         1.0000      0.000000            0.000000         0.0000
+# Detection Rate                     0.7905      0.000000            0.000000         0.0000
+# Detection Prevalence               0.7905      0.005739            0.004304         0.1994
+# Balanced Accuracy                      NA            NA                  NA             NA
 
-# Compare classification to only the  deforestation of 2020
 
-# Estimate the deforestation difference between our classification and PRODES 2019
+acc_2018 <- prodes_class_sf %>%
+    sf::st_set_geometry(NULL) %>%
+    dplyr::filter(CLASS_NAME == "d2018") %>%
+    dplyr::mutate(reference = dplyr::recode(MAIN_CLASS,
+                                            "DESMATAMENTO" = "deforestation",
+                                            .default = NA_character_),
+                  predicted = tolower(class_mode)) %>%
+    dplyr::select(reference, predicted) %>%
+    tidyr::drop_na()
 
-# Find the difference in PRODES 2020
+caret::confusionMatrix(data =      factor(acc_2018$predicted,
+                                          levels = my_levels),
+                       reference = factor(acc_2018$reference,
+                                          levels = my_levels))
+#---- 5x5 bayes ----
+# Confusion Matrix and Statistics
+#
+# Reference
+# Prediction      deforestation forest natnonforest pasture
+# deforestation            18      0            0       0
+# forest                   67      0            0       0
+# natnonforest             13      0            0       0
+# pasture                 731      0            0       0
+#
+# Overall Statistics
+#
+# Accuracy : 0.0217
+# 95% CI : (0.0129, 0.0341)
+# No Information Rate : 1
+# P-Value [Acc > NIR] : 1
+#
+# Kappa : 0
+#
+# Mcnemar's Test P-Value : NA
+#
+# Statistics by Class:
+#
+#                      Class: deforestation Class: forest Class: natnonforest Class: pasture
+# Sensitivity                       0.02171            NA                  NA             NA
+# Specificity                            NA       0.91918             0.98432         0.1182
+# Pos Pred Value                         NA            NA                  NA             NA
+# Neg Pred Value                         NA            NA                  NA             NA
+# Prevalence                        1.00000       0.00000             0.00000         0.0000
+# Detection Rate                    0.02171       0.00000             0.00000         0.0000
+# Detection Prevalence              0.02171       0.08082             0.01568         0.8818
+# Balanced Accuracy                      NA            NA                  NA
+
+#---- 9x9 bayes ----
+# Confusion Matrix and Statistics
+#
+# Reference
+# Prediction      deforestation forest natnonforest pasture
+# deforestation            19      0            0       0
+# forest                   77      0            0       0
+# natnonforest             17      0            0       0
+# pasture                 716      0            0       0
+#
+# Overall Statistics
+#
+# Accuracy : 0.0229
+# 95% CI : (0.0139, 0.0356)
+# No Information Rate : 1
+# P-Value [Acc > NIR] : 1
+#
+# Kappa : 0
+#
+# Mcnemar's Test P-Value : NA
+#
+# Statistics by Class:
+#
+#                      Class: deforestation Class: forest Class: natnonforest Class: pasture
+# Sensitivity                       0.02292            NA                  NA             NA
+# Specificity                            NA       0.90712             0.97949         0.1363
+# Pos Pred Value                         NA            NA                  NA             NA
+# Neg Pred Value                         NA            NA                  NA             NA
+# Prevalence                        1.00000       0.00000             0.00000         0.0000
+# Detection Rate                    0.02292       0.00000             0.00000         0.0000
+# Detection Prevalence              0.02292       0.09288             0.02051         0.8637
+# Balanced Accuracy                      NA            NA                  NA             NA
+#
+#---- 15x15 bayes ----
+# Confusion Matrix and Statistics
+#
+# Reference
+# Prediction      deforestation forest natnonforest pasture
+# deforestation            21      0            0       0
+# forest                   92      0            0       0
+# natnonforest             16      0            0       0
+# pasture                 700      0            0       0
+#
+# Overall Statistics
+#
+# Accuracy : 0.0253
+# 95% CI : (0.0157, 0.0385)
+# No Information Rate : 1
+# P-Value [Acc > NIR] : 1
+#
+# Kappa : 0
+#
+# Mcnemar's Test P-Value : NA
+#
+# Statistics by Class:
+#
+#                      Class: deforestation Class: forest Class: natnonforest
+# Sensitivity                       0.02533            NA                  NA
+# Specificity                            NA         0.889              0.9807
+# Pos Pred Value                         NA            NA                  NA
+# Neg Pred Value                         NA            NA                  NA
+# Prevalence                        1.00000         0.000              0.0000
+# Detection Rate                    0.02533         0.000              0.0000
+# Detection Prevalence              0.02533         0.111              0.0193
+# Balanced Accuracy                      NA            NA                  NA
+#                      Class: pasture
+# Sensitivity                      NA
+# Specificity                  0.1556
+# Pos Pred Value                   NA
+# Neg Pred Value                   NA
+# Prevalence                   0.0000
+# Detection Rate               0.0000
+# Detection Prevalence         0.8444
+# Balanced Accuracy                NA
+#
+#---- 19x19 bayes ----
+# Confusion Matrix and Statistics
+#
+# Reference
+# Prediction      deforestation forest natnonforest pasture
+# deforestation            21      0            0       0
+# forest                  106      0            0       0
+# natnonforest             17      0            0       0
+# pasture                 685      0            0       0
+#
+# Overall Statistics
+#
+# Accuracy : 0.0253
+# 95% CI : (0.0157, 0.0385)
+# No Information Rate : 1
+# P-Value [Acc > NIR] : 1
+#
+# Kappa : 0
+#
+# Mcnemar's Test P-Value : NA
+#
+# Statistics by Class:
+#
+#                      Class: deforestation Class: forest Class: natnonforest
+# Sensitivity                       0.02533            NA                  NA
+# Specificity                            NA        0.8721             0.97949
+# Pos Pred Value                         NA            NA                  NA
+# Neg Pred Value                         NA            NA                  NA
+# Prevalence                        1.00000        0.0000             0.00000
+# Detection Rate                    0.02533        0.0000             0.00000
+# Detection Prevalence              0.02533        0.1279             0.02051
+# Balanced Accuracy                      NA            NA                  NA
+#                      Class: pasture
+# Sensitivity                      NA
+# Specificity                  0.1737
+# Pos Pred Value                   NA
+# Neg Pred Value                   NA
+# Prevalence                   0.0000
+# Detection Rate               0.0000
+# Detection Prevalence         0.8263
+# Balanced Accuracy                NA
+#
+#---- 25x25 bayes ----
+# Confusion Matrix and Statistics
+#
+# Reference
+# Prediction      deforestation forest natnonforest pasture
+# deforestation            18      0            0       0
+# forest                  114      0            0       0
+# natnonforest             15      0            0       0
+# pasture                 682      0            0       0
+#
+# Overall Statistics
+#
+# Accuracy : 0.0217
+# 95% CI : (0.0129, 0.0341)
+# No Information Rate : 1
+# P-Value [Acc > NIR] : 1
+#
+# Kappa : 0
+#
+# Mcnemar's Test P-Value : NA
+#
+# Statistics by Class:
+#
+#                      Class: deforestation Class: forest Class: natnonforest
+# Sensitivity                       0.02171            NA                  NA
+# Specificity                            NA        0.8625             0.98191
+# Pos Pred Value                         NA            NA                  NA
+# Neg Pred Value                         NA            NA                  NA
+# Prevalence                        1.00000        0.0000             0.00000
+# Detection Rate                    0.02171        0.0000             0.00000
+# Detection Prevalence              0.02171        0.1375             0.01809
+# Balanced Accuracy                      NA            NA                  NA
+#                      Class: pasture
+# Sensitivity                      NA
+# Specificity                  0.1773
+# Pos Pred Value                   NA
+# Neg Pred Value                   NA
+# Prevalence                   0.0000
+# Detection Rate               0.0000
+# Detection Prevalence         0.8227
+# Balanced Accuracy                NA
+#
+#---- 5x5 bilinear ----
+# Confusion Matrix and Statistics
+#
+# Reference
+# Prediction      deforestation forest natnonforest pasture
+# deforestation            18      0            0       0
+# forest                   62      0            0       0
+# natnonforest             13      0            0       0
+# pasture                 736      0            0       0
+#
+# Overall Statistics
+#
+# Accuracy : 0.0217
+# 95% CI : (0.0129, 0.0341)
+# No Information Rate : 1
+# P-Value [Acc > NIR] : 1
+#
+# Kappa : 0
+#
+# Mcnemar's Test P-Value : NA
+#
+# Statistics by Class:
+#
+#                      Class: deforestation Class: forest Class: natnonforest Class: pasture
+# Sensitivity                       0.02171            NA                  NA             NA
+# Specificity                            NA       0.92521             0.98432         0.1122
+# Pos Pred Value                         NA            NA                  NA             NA
+# Neg Pred Value                         NA            NA                  NA             NA
+# Prevalence                        1.00000       0.00000             0.00000         0.0000
+# Detection Rate                    0.02171       0.00000             0.00000         0.0000
+# Detection Prevalence              0.02171       0.07479             0.01568         0.8878
+# Balanced Accuracy                      NA            NA                  NA             NA
+#
+#---- 9x9 bilinear ----
+# Confusion Matrix and Statistics
+#
+# Reference
+# Prediction      deforestation forest natnonforest pasture
+# deforestation            18      0            0       0
+# forest                   62      0            0       0
+# natnonforest             12      0            0       0
+# pasture                 737      0            0       0
+#
+# Overall Statistics
+#
+# Accuracy : 0.0217
+# 95% CI : (0.0129, 0.0341)
+# No Information Rate : 1
+# P-Value [Acc > NIR] : 1
+#
+# Kappa : 0
+#
+# Mcnemar's Test P-Value : NA
+#
+# Statistics by Class:
+#
+#                      Class: deforestation Class: forest Class: natnonforest Class: pasture
+# Sensitivity                       0.02171            NA                  NA             NA
+# Specificity                            NA       0.92521             0.98552          0.111
+# Pos Pred Value                         NA            NA                  NA             NA
+# Neg Pred Value                         NA            NA                  NA             NA
+# Prevalence                        1.00000       0.00000             0.00000          0.000
+# Detection Rate                    0.02171       0.00000             0.00000          0.000
+# Detection Prevalence              0.02171       0.07479             0.01448          0.889
+# Balanced Accuracy                      NA            NA                  NA             NA
