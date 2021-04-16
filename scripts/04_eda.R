@@ -7,7 +7,9 @@ library(tidyr)
 samples_tb <- "./data/samples/samples.rds" %>%
 #samples_tb <- "./data/samples/samples_som.rds" %>%
 #samples_tb <- "./data/samples/samples_paper.rds" %>%
-    readRDS() %>%
+    readRDS()
+
+samples_tb %>%
     dplyr::select("longitude", "latitude", "start_date", "end_date", "label",
                   "cube", "time_series") %>%
     (function(x){

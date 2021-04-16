@@ -15,6 +15,9 @@ samples_tb <- samples_file %>%
     readRDS() %>%
     sits_select(my_bands)
 
+plot(samples_tb)
+
+
 ml_model <- sits::sits_train(samples_tb,
                              ml_method = ml_method)
 saveRDS(ml_model, model_file)
