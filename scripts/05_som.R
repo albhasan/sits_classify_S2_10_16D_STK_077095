@@ -23,9 +23,8 @@ run_som <- function(my_samples){
 
 #---- Script -----
 
-samples_file <- "./data/samples/samples.rds"
+samples_file <- "./data/samples/samples_tb.rds"
 stopifnot(file.exists(samples_file))
-
 
 samples_tb <- samples_file %>%
     readRDS() %>%
@@ -54,7 +53,7 @@ for (my_type in c("codes", "mapping")) {
 
 cluster_overall <- sits::sits_som_evaluate_cluster(som_cluster)
 # NOTE: There is no confusion matrix here!
-cluster_overall$confusion_matrix
+#cluster_overall$confusion_matrix
 
 som_samples_tb <- som_cluster %>%
     sits::sits_som_clean_samples() %>%
@@ -66,9 +65,8 @@ som_samples_tb <- som_cluster %>%
     }) %>%
     dplyr::filter(eval == "clean")
 # eval        n
-# 1 analyze   204
-# 2 clean     818
-# 3 remove    388
+# 1 analyze    81
+# 2 clean     867
 
 time_series_tb <- samples_file %>%
     readRDS() %>%

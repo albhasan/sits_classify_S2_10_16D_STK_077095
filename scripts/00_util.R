@@ -3,6 +3,7 @@
 #' @param point_sf A sf object.
 #' @return         A sf object.
 add_coords <- function(point_sf){
+    stopifnot(inherits(point_sf, "sf"))
     xy <- point_sf %>%
         sf::st_coordinates() %>%
         magrittr::set_colnames(c("longitude", "latitude")) %>%
@@ -13,69 +14,6 @@ add_coords <- function(point_sf){
 }
 
 
-#' Build a list of start and end pixels
-#'
-#' @param r_obj    A raster object.
-#' @param n_row    An integer. The number of rows in the grid.
-#' @param n_col    An integer. The number of columns in the grid.
-#' @param v_size   An integer. The vertical size of a cell in the grid.
-#' @param h_size   An integer. The horizontal size of a cell in the grid.
-#' @return         A dataframe of 2 column-lists.
-build_grid <- function(n_row, n_col, v_size, h_size) {
-
-    breaks_v <- unique(c(seq(1, n_row, by = v_size), n_row + 1))
-    v_start <- breaks_v[seq_len(length(breaks_v) - 1)]
-    v_end <- breaks_v[-1] - 1
-
-    breaks_h <- unique(c(seq(1, n_col, by = h_size), n_col + 1))
-    h_start <- breaks_h[seq_len(length(breaks_h) - 1)]
-    h_end <- breaks_h[-1] - 1
-
-    v_interval <- mapply(list, r1 = v_start, r2 = v_end, SIMPLIFY = FALSE)
-    h_interval <- mapply(list, c1 = h_start, c2 = h_end, SIMPLIFY = FALSE)
-
-    return(expand.grid(v = v_interval, h = h_interval))
-}
-
-
-#' Build a tesselation of subtiles of a raster using the given grid.
-#'
-#' @param grid       A grid created using the function build_grid.
-#' @param image_path Path to a raster.
-#' @param out_dir    A path.
-#' @param out_file   A path.
-#' @return           Paths to VRT files.
-build_vrt <- function(grid, image_path, out_dir, out_file){
-    r_obj <- raster::raster(image_path)
-    stopifnot(dir.exists(out_dir))
-    res <- lapply(seq_len(nrow(grid)), function(i){
-        my_extent <- raster::extent(r_obj,
-                                    c1 = grid$h[[i]]$c1,
-                                    c2 = grid$h[[i]]$c2,
-                                    r1 = grid$v[[i]]$r1,
-                                    r2 = grid$v[[i]]$r2)
-        out_dir <- paste0(out_dir, "/",
-                          paste(grid$h[[i]]$c1,
-                                grid$v[[i]]$r1,
-                                sep = "_"))
-        if (!dir.exists(out_dir))
-            dir.create(out_dir)
-        stopifnot(dir.exists(out_dir))
-
-        file_name <- paste0(out_dir, "/", out_file)
-
-        gdalUtils::gdalbuildvrt(
-            gdalfile = raster::filename(r_obj),
-            output.vrt = file_name,
-            te = c(attr(my_extent, "xmin"),
-                   attr(my_extent, "ymin"),
-                   attr(my_extent, "xmax"),
-                   attr(my_extent, "ymax")),
-            tr = c(raster::xres(r_obj), raster::xres(r_obj)))
-        return(file_name)
-    })
-    return(unlist(res))
-}
 
 #' Remove invalid samples of time series.
 #'
@@ -83,12 +21,26 @@ build_vrt <- function(grid, image_path, out_dir, out_file){
 #' @report report  When TRUE, not cleaning is done, just marking the offending samples.
 #' @return A sits_tibble.
 clean_ts <- function(sits_tb, report = FALSE){
+    .count_na <- function(x){
+        return(sum(is.na(x)))
+    }
+    .count_null <- function(x){
+        return(sum(is.null(x), na.rm = TRUE))
+    }
+    .count_overflow <- function(x){
+        return(sum(sum(as.matrix(x[,2:ncol(x)]) < -1, na.rm = TRUE),
+                   sum(as.matrix(x[,2:ncol(x)]) >  1, na.rm = TRUE)))
+    }
+    .mean_time_ts <- function(x){
+        return(mean(x[[1]]))
+    }
     sits_tb %>%
         tidyr::drop_na() %>%
-        dplyr::mutate(has_na    = purrr::map_int(time_series, function(x){return(sum(is.na(x)))}),
-                      has_null  = purrr::map_int(time_series, function(x){return(sum(is.null(x), na.rm = TRUE))}),
-                      has_overflow  = purrr::map_int(time_series, function(x){return(sum(sum(as.matrix(x[,2:ncol(x)]) < -1, na.rm = TRUE), sum(as.matrix(x[,2:ncol(x)]) > 1, na.rm = TRUE)))}),
-                      time_mean = purrr::map_dbl(time_series, function(x){return(mean(x[[1]]))}),
+        dplyr::mutate(has_na    = purrr::map_int(time_series, .count_na),
+                      has_null  = purrr::map_int(time_series, .count_null),
+                      has_overflow  = purrr::map_int(time_series,
+                                                     .count_overflow),
+                      time_mean = purrr::map_dbl(time_series, .mean_time_ts),
                       n_cols    = purrr::map_int(time_series, ncol),
                       n_rows    = purrr::map_int(time_series, nrow)) %>%
         (function(.data){
@@ -132,6 +84,7 @@ clean_ts <- function(sits_tb, report = FALSE){
 }
 
 
+
 #' Compute the information entropy in nats.
 #'
 #' @param img_path A length-one character. Path to a sits probability file.
@@ -167,38 +120,6 @@ compute_entropy <- function(img_path, out_file){
 }
 
 
-# Return a cube
-get_cube <- function(cube){
-    cube_path <- tibble::tribble(
-        ~name, ~dir_path,
-        "cube",   "/home/alber.ipia/Documents/sits_classify_S2_10_16D_STK_077095/data/cube/077095",
-        "mini_1", "/home/alber.ipia/Documents/sits_classify_S2_10_16D_STK_077095/data/cube/mini_077095_1",
-        "mini_2", "/home/alber.ipia/Documents/sits_classify_S2_10_16D_STK_077095/data/cube/mini_077095_2",
-        "mini_bayes", "/home/alber.ipia/Documents/sits_classify_S2_10_16D_STK_077095/data/cube/mini_077095_bayes"
-    ) %>%
-        ensurer::ensure_that(all(dir.exists(.$dir_path)),
-                             err_desc = "Invalid cube directories!")
-
-    cube_dir <- cube_path %>%
-        dplyr::filter(name == cube) %>%
-        ensurer::ensure_that(nrow(.) == 1,
-                             err_desc = sprintf("Cube not found. Available options are %s",
-                                                paste(cube_path$name, collapse = ", "))) %>%
-        dplyr::pull(dir_path)
-
-    sits::sits_cube(type = "STACK",
-                    name = "S2_10_16D_STK_077095",
-                    satellite = "SENTINEL-2",
-                    sensor = "MSI",
-                    data_dir = cube_dir,
-                    delim = "_",
-                    parse_info = c("mission", "sp_resolution",
-                                   "time_resolution", "type",
-                                   "version", "tile", "date",
-                                   "end_date", "band")) %>%
-        return()
-}
-
 
 #' Test if the data in a sits_tibble is valid.
 #'
@@ -230,13 +151,10 @@ is_sits_valid <- function(x){
                              err_desc = "The columns must not have list names internally!") %>%
         ensurer::ensure_that(!("grouped_df" %in% class(.)),
                              err_desc = "Grouped tibbles are not supported in sits!") %>%
-        ensurer::ensure_that("sits" %in% class(.),
+        ensurer::ensure_that(inherits(., "sits"),
                              err_desc = "The tibble is not a sits tibble")
     invisible(x)
 }
-
-
-
 
 
 #' Helper function to obtain a tibble of reference and predicted values.
@@ -263,12 +181,11 @@ get_ref_pred <- function(sf_obj, class_labels){
                              err_desc = "NA are not allowed!") %>%
         ensurer::ensure_that(all(unique(.$reference) %in% unique(.$predicted)),
                              all(unique(.$predicted) %in% unique(.$reference)),
-                                 err_desc = "Label missmatch!") %>%
+                             err_desc = "Label missmatch!") %>%
         dplyr::mutate(reference = factor(reference, levels = class_labels),
                       predicted = factor(predicted, levels = class_labels)) %>%
         return()
 }
-
 
 
 #' Helper function to get a confusion matrix object.
@@ -300,4 +217,24 @@ get_accuracies <- function(cm_mt){
     names(prod) <- paste0("prod_", names(prod))
     names(user) <- paste0("user_", names(user))
     return(tibble::as_tibble(t(c(overall, prod, user))))
+}
+
+#' Helper function for writing an sf object to a temporal file
+#'
+#' @param x An sf objet.
+#' @retun A character. Path to a temporal shp file.
+sf_to_tmp <- function(x){
+    tmp_file <- tempfile(pattern = "prodes_proj_",
+                         fileext = ".shp")
+    x %>%
+        dplyr::mutate(ID = as.integer(ID)) %>%
+        sf::write_sf(dsn = tmp_file)
+    return(tmp_file)
+}
+
+# Helper for computing the mode.
+# NOTE: R doesn't already have a mode?
+getMode <- function(x) {
+    keys <- unique(x)
+    keys[which.max(tabulate(match(x, keys)))]
 }
