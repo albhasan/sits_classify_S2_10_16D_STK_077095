@@ -238,3 +238,23 @@ getMode <- function(x) {
     keys <- unique(x)
     keys[which.max(tabulate(match(x, keys)))]
 }
+
+
+# Helper function. Get the sits' probability files in a directory.
+get_prob_files <- function(dir_path, cube_name) {
+    dir_path %>%
+        list.files(pattern = paste0("^", cube_name, ".+tif$"),
+                   full.names = TRUE) %>%
+        return()
+}
+
+# Helper function. Get the type of model from its path.
+get_model_type <- function(model_file) {
+    model_file %>%
+        dirname() %>%
+        basename() %>%
+        stringr::str_split("_") %>%
+        unlist() %>%
+        dplyr::last() %>%
+        return()
+}
