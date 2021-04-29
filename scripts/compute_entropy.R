@@ -1,3 +1,4 @@
+stop("update")
 library(dplyr)
 library(stringr)
 
@@ -16,6 +17,3 @@ prob_files_tb <- "/home/alber.ipia/Documents/sits_classify_S2_10_16D_STK_077095/
                                                   pattern = "_v1.tif",
                                                   replacement = "_entropy_v1.tif")) %>%
     dplyr::mutate(res = purrr::map2_chr(file_path, out_file, compute_entropy))
-
-
-
