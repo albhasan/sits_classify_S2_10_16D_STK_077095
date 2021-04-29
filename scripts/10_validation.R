@@ -84,6 +84,8 @@ do_validation <- function(out_dir, label_file, validation_shp, my_cube) {
         tidyr::unnest(acc) %>%
         return()
 }
+
+# Helper. Compare sits's raster classifications to PRODES.
 do_validation_prodes <- function(out_dir, label_file, my_cube) {
     my_smoother <- "bayes"
     prodes_dir <- "./data/prodes/yearly_deforestation_biome/077095"
@@ -201,9 +203,50 @@ do_validation_prodes <- function(out_dir, label_file, my_cube) {
         return()
 }
 
+# Helper. Convert raster codes into labels.
+add_labels_to_freq <- function(class_freq, labels) {
+    class_freq %>%
+        tibble::as_tibble() %>%
+        dplyr::mutate(label = dplyr::recode(value, !!!labels)) %>%
+        return()
+}
 
+# Helper. Get the area of a pixel.
+get_pixel_area <- function(x) {
+    x %>%
+        terra::res() %>%
+        prod() %>%
+        return()
+}
 
 #---- Validation using sample points and Olofson ----
+
+
+# Print areas in each map
+label_area_tb <- my_model_files %>%
+    tibble::as_tibble() %>%
+    dplyr::rename(model_file = value) %>%
+    # NOTE: Assume the results are hosted along with the model.
+    dplyr::mutate(out_dir    = purrr::map_chr(model_file, dirname),
+                  model_type = purrr::map_chr(model_file, get_model_type),
+                  label_file = file.path(out_dir, "labels.txt"),
+                  labels     = purrr::map(label_file, prepare_labels),
+                  class_tb   = purrr::map(out_dir, list_classifications)) %>%
+    tidyr::unnest(class_tb) %>%
+    dplyr::mutate(class_r    = purrr::map(file_path, terra::rast),
+                  class_freq = purrr::map(class_r, terra::freq),
+                  labels     = purrr::map2(class_freq, labels,
+                                           add_labels_to_freq),
+                  sp_res     = purrr::map_dbl(class_r, get_pixel_area)) %>%
+    dplyr::select(class_file = file_path, smooth, labels, sp_res, model_type) %>%
+    tidyr::unnest(labels) %>%
+    dplyr::select(class_file, smooth, model_type, label, sp_res, count) %>%
+    dplyr::mutate(area_km2 = count * sp_res / 1e6) %>%
+    dplyr::select(-sp_res, -count) %>%
+    tidyr::pivot_wider(names_from = label,
+                       values_from = area_km2)
+label_area_tb %>%
+    knitr::kable(digits = 2)
 
 # Get the models and their resulting classification rasters.
 model_tb <- my_model_files %>%
