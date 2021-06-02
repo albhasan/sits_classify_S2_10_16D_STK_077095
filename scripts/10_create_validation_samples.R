@@ -29,7 +29,9 @@ sf_to_shp <- function(x, y, out_dir){
                           out_name)
     if (!dir.exists(dirname(out_name)))
         dir.create(dirname(out_name))
-    sf::write_sf(x, out_name)
+    sf::write_sf(x, out_name,
+                 append = NA,
+                 delete_layer = FALSE)
     return(TRUE)
 }
 
